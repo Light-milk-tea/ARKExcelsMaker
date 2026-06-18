@@ -1,5 +1,0 @@
-yt-dlp>=2023.01.01
-imageio-ffmpeg>=0.4.8
-easyocr>=1.6.0
-pillow
-numpy

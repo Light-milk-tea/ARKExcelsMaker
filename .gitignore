@@ -15,6 +15,8 @@ dist/
 
 # Generated outputs
 excels/
+表格工具（用户向）/
+表格工具*/
 *.zip
 UR.xlsx
 *.log
