@@ -1,0 +1,37 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build artifacts
+build/
+dist/
+*.spec.bak
+
+# Generated outputs
+excels/
+*.zip
+UR.xlsx
+*.log
+
+# Local secrets and Bilibili credentials
+.env
+.env.*
+local_cookie.txt
+cookie.txt
+*cookie*.txt
+
+# IDE and local assistant metadata
+.trae/
+.vscode/
+.idea/
+
+# OS shortcuts and metadata
+*.lnk
+Thumbs.db
+.DS_Store
