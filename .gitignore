@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.cache/
+npm_cache/
+*.local
+*.log
+.DS_Store
+ocr-dist.tar.gz
+
+# 构建/发布产物与桌面版打包目录
+桌面版/
+desktop-release-final/
+reports/
+
+# 可通过脚本重新下载的大型资源
+public/models/
+public/wasm/
