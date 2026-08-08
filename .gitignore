@@ -11,7 +11,3 @@ ocr-dist.tar.gz
 桌面版/
 desktop-release-final/
 reports/
-
-# 可通过脚本重新下载的大型资源
-public/models/
-public/wasm/

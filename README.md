@@ -6,16 +6,16 @@
 
 ## 本地运行
 
+仓库已包含 OCR 模型、ONNX Runtime WASM，以及干员技能索引与图标。克隆后可直接：
+
 ```bash
 npm install
-npm run assets:setup
-npm run data:sync
 npm run dev
 ```
 
-首次执行 `assets:setup` 会下载 PP-OCRv5 mobile 中文检测、识别模型，以及与 PaddleOCR Worker 匹配的 ONNX Runtime 资源到 `public/`。
+浏览器打开终端提示的本地地址即可。
 
-`data:sync` 会从 [ArknightsGameResource](https://github.com/yuanyan3060/ArknightsGameResource) 生成本地干员技能索引与图标（`public/data/`、`public/skills/`），详情见 `doc/干员技能数据获取计划.md`。游戏资源版权归鹰角网络，仅供学习交流。
+可选：若需重新下载模型或同步游戏数据，可执行 `npm run assets:setup` / `npm run data:sync`（详见 `doc/干员技能数据获取计划.md`）。游戏资源版权归鹰角网络，仅供学习交流。
 
 生产构建：
 
