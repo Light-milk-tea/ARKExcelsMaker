@@ -19,21 +19,41 @@ export interface RecognitionResult {
 
 export type OcrLoadStage = "models" | "runtime" | "session";
 
+export interface OcrProgress {
+  stage: string;
+  percent: number;
+}
+
 const baseUrl = import.meta.env.BASE_URL;
 const ASSET_FETCH_TIMEOUT_MS = 5 * 60 * 1000;
 
 const DET_MODEL = "models/PP-OCRv5_mobile_det_onnx_infer.tar";
 const REC_MODEL = "models/PP-OCRv5_mobile_rec_onnx_infer.tar";
 
+// 编队截图常见约 720p；短边低于此值时先放大，减轻边缘小字名条漏检。
+const OCR_TARGET_MIN_SIDE = 960;
+const OCR_MAX_SCALE = 2.5;
+
 let instance: OcrInstance | null = null;
 let initialization: Promise<OcrInstance> | null = null;
 let loadStage: OcrLoadStage = "models";
 const loadStageListeners = new Set<(stage: OcrLoadStage) => void>();
 
+// 进度追踪
+let currentProgress: OcrProgress = { stage: "", percent: 0 };
+const progressListeners = new Set<(progress: OcrProgress) => void>();
+
 function setLoadStage(stage: OcrLoadStage) {
   loadStage = stage;
   for (const listener of loadStageListeners) {
     listener(stage);
+  }
+}
+
+function setProgress(stage: string, percent: number) {
+  currentProgress = { stage, percent };
+  for (const listener of progressListeners) {
+    listener(currentProgress);
   }
 }
 
@@ -44,6 +64,16 @@ export function subscribeOcrLoadStage(
   listener(loadStage);
   return () => {
     loadStageListeners.delete(listener);
+  };
+}
+
+export function subscribeOcrProgress(
+  listener: (progress: OcrProgress) => void,
+): () => void {
+  progressListeners.add(listener);
+  listener(currentProgress);
+  return () => {
+    progressListeners.delete(listener);
   };
 }
 
@@ -61,17 +91,8 @@ function canUseWebGpu(): boolean {
 
 function resolveRuntimeAssets() {
   const webgpu = canUseWebGpu();
-  // jsep 体积约 24MB，仅 WebGPU 需要；普通 HTTP/WASM 用约 12MB 版本，降低首次超时概率。
-  const wasmFile = webgpu
-    ? "ort-wasm-simd-threaded.jsep.wasm"
-    : "ort-wasm-simd-threaded.wasm";
-
   return {
     backend: webgpu ? ("auto" as const) : ("wasm" as const),
-    wasmUrl: localAsset(`wasm/1.24.3/${wasmFile}`),
-    wasmPaths: {
-      wasm: localAsset(`wasm/1.24.3/${wasmFile}`),
-    } as unknown as string,
   };
 }
 
@@ -101,15 +122,47 @@ async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Respons
   }
 }
 
-async function preloadAssets(wasmUrl: string): Promise<void> {
-  setLoadStage("models");
-  await Promise.all([
-    fetchWithTimeout(localAsset(DET_MODEL), ASSET_FETCH_TIMEOUT_MS),
-    fetchWithTimeout(localAsset(REC_MODEL), ASSET_FETCH_TIMEOUT_MS),
-  ]);
+async function fetchWithProgress(
+  url: string,
+  label: string,
+  percentBase: number,
+  percentRange: number,
+): Promise<Response> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}：${url}`);
+  }
+  const contentLength = Number(response.headers.get("content-length")) || 0;
+  const reader = response.body?.getReader();
+  if (!contentLength || !reader) {
+    // 无法获取大小，直接读完
+    setProgress(label, percentBase + percentRange);
+    const buf = await response.arrayBuffer();
+    return new Response(buf, { headers: response.headers });
+  }
+  let received = 0;
+  const chunks: Uint8Array[] = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    const pct = percentBase + Math.round((received / contentLength) * percentRange);
+    setProgress(label, Math.min(pct, percentBase + percentRange));
+  }
+  const all = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    all.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return new Response(all, { headers: response.headers });
+}
 
-  setLoadStage("runtime");
-  await fetchWithTimeout(wasmUrl, ASSET_FETCH_TIMEOUT_MS);
+async function preloadAssets(): Promise<void> {
+  setLoadStage("models");
+  await fetchWithProgress(localAsset(DET_MODEL), "正在下载检测模型...", 0, 40);
+  await fetchWithProgress(localAsset(REC_MODEL), "正在下载识别模型...", 40, 40);
 }
 
 export async function initializeOcr(): Promise<InitializationSummary | null> {
@@ -125,9 +178,10 @@ async function getOcr(): Promise<OcrInstance> {
   if (!initialization) {
     initialization = (async () => {
       const runtime = resolveRuntimeAssets();
-      await preloadAssets(runtime.wasmUrl);
+      await preloadAssets();
 
       setLoadStage("session");
+      setProgress("正在初始化识图引擎...", 80);
       const ocr = await PaddleOCR.create({
         worker: true,
         textDetectionModelName: "PP-OCRv5_mobile_det",
@@ -140,14 +194,11 @@ async function getOcr(): Promise<OcrInstance> {
         },
         ortOptions: {
           backend: runtime.backend,
-          // 仅覆盖 WASM 地址，让 Worker 使用其内置且版本完全匹配的 JS glue。
-          // 这样可避免 Vite 拦截 public 目录中的动态 .mjs 导入。
-          wasmPaths: runtime.wasmPaths,
-          // 单线程可在 iframe、非跨源隔离页面及普通静态托管中稳定运行。
           numThreads: 1,
           simd: true,
         },
       });
+      setProgress("", 100);
       instance = ocr;
       return ocr;
     })().catch((error) => {
@@ -159,25 +210,92 @@ async function getOcr(): Promise<OcrInstance> {
   return initialization;
 }
 
+interface PreparedOcrInput {
+  source: File | HTMLCanvasElement;
+  scale: number;
+  original: { width: number; height: number };
+}
+
+async function prepareOcrInput(file: File): Promise<PreparedOcrInput> {
+  const bitmap = await createImageBitmap(file);
+  try {
+    const { width, height } = bitmap;
+    const minSide = Math.min(width, height);
+    const scale =
+      minSide > 0
+        ? Math.min(OCR_MAX_SCALE, Math.max(1, OCR_TARGET_MIN_SIDE / minSide))
+        : 1;
+
+    if (scale <= 1.01) {
+      return { source: file, scale: 1, original: { width, height } };
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(width * scale);
+    canvas.height = Math.round(height * scale);
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("浏览器无法创建 OCR 预处理画布");
+    }
+
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+    return {
+      source: canvas,
+      scale,
+      original: { width, height },
+    };
+  } finally {
+    bitmap.close();
+  }
+}
+
+function mapLinesToOriginal(
+  lines: OcrResultItem[],
+  scale: number,
+): OcrResultItem[] {
+  if (scale === 1) {
+    return lines;
+  }
+
+  return lines.map((item) => ({
+    ...item,
+    poly: item.poly.map(([x, y]) => [x / scale, y / scale] as [number, number]),
+  }));
+}
+
 export async function recognizeImage(file: File): Promise<RecognitionResult> {
   try {
     const ocr = await getOcr();
-    const [result] = await ocr.predict(file, {
-      textRecScoreThresh: 0.45,
+    const prepared = await prepareOcrInput(file);
+    const [result] = await ocr.predict(prepared.source, {
+      // 诊断结论：默认检测对左下角小字名条偏保守；略降阈值并提高检测输入边长。
+      textRecScoreThresh: 0.4,
+      textDetThresh: 0.2,
+      textDetBoxThresh: 0.5,
+      textDetUnclipRatio: 1.8,
+      textDetLimitType: "min",
+      textDetLimitSideLen: 1280,
     });
 
     if (!result) {
       throw new Error("OCR 没有返回识别结果");
     }
 
-    const lines = result.items.filter((item) => item.text.trim().length > 0);
+    const lines = mapLinesToOriginal(
+      result.items.filter((item) => item.text.trim().length > 0),
+      prepared.scale,
+    );
 
     return {
       text: lines.map((item) => item.text.trim()).join("\n"),
       lines,
       elapsedMs: result.metrics.totalMs,
       provider: result.runtime.recProvider,
-      image: result.image,
+      // 技能裁剪基于原图；坐标已映射回原图尺寸。
+      image: prepared.original,
     };
   } catch (error) {
     throw new Error(toFriendlyError(error));

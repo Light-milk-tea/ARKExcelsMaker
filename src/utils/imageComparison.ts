@@ -216,7 +216,7 @@ function compareFeatures(
   const hashScore = hashSimilarity(screenshot.hash, storedSkill.hash);
 
   return {
-    score: edgeScore * 0.5 + pixelScore * 0.35 + colorScore * 0.15,
+    score: edgeScore * 0.40 + pixelScore * 0.30 + hashScore * 0.20 + colorScore * 0.10,
     edgeSimilarity: edgeScore,
     pixelSimilarity: pixelScore,
     colorSimilarity: colorScore,
@@ -269,5 +269,6 @@ export async function compareSkillImage(
   }
 
   if (!best) throw new Error("无法生成技能图标比较结果");
+  console.log(`[技能对比] ${skill.name} | 边缘:${best.edgeSimilarity.toFixed(3)} 像素:${best.pixelSimilarity.toFixed(3)} 哈希:${best.hashSimilarity.toFixed(3)} 颜色:${best.colorSimilarity.toFixed(3)} → 总分:${best.score.toFixed(3)}`);
   return best;
 }

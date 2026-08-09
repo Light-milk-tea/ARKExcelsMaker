@@ -45,6 +45,7 @@ export interface SkillCandidate {
 export type SkillRecognitionStatus =
   | "matched"
   | "low-confidence"
+  | "low-gap"
   | "ambiguous"
   | "name-uncertain"
   | "out-of-bounds"
